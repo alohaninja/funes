@@ -236,6 +236,10 @@ enum Cmd {
         /// The memory — an `<org>/<repo>` shorthand, an `hf://…` URI, a local path, or `local`.
         #[arg(value_name = "MEMORY")]
         memory: String,
+        /// Skip bind's built-in first push. Still validate and bind the memory and re-run
+        /// integrations; their setup code and hooks may publish independently.
+        #[arg(long)]
+        no_push: bool,
     },
     /// Add funes to a coding agent.
     ///
@@ -487,7 +491,7 @@ async fn run() -> Result<()> {
         Cmd::Scrub => scrub::run().await,
         Cmd::Update { force } => update::run(force).await,
         Cmd::Mcp { memory } => mcp::run(memory).await,
-        Cmd::Bind { memory } => bind::run(&memory).await,
+        Cmd::Bind { memory, no_push } => bind::run(&memory, no_push).await,
         Cmd::Add { agent, memory, from } => add::run(&agent, memory.memory.as_deref(), from.as_deref()).await,
         Cmd::Remove { agent } => add::remove(&agent).await,
     }

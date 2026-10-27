@@ -57,6 +57,12 @@ funes bind <user|org>/other-memory         # every installed agent follows
 funes bind local                           # back to the local memory, every agent following
 ```
 
+To bind now and defer the built-in first push, run `funes bind <memory> --no-push`, then
+`funes push <memory>` when ready. The memory is still validated and every installed integration's
+setup still runs. Setup code and installed hooks may publish independently; this option skips only
+`bind`'s own first push. It creates no push receipt: binding alone does not make unpushed local
+turns appear in bound-memory reads, which still depend on receipt evidence from a push.
+
 - The binding is one record for the host, `$FUNES_HOME/bound`, written by `bind` alone. Each
   agent's registration carries a copy, and `bind` re-runs every installed agent's setup so the
   copies follow; a bare `funes add <agent>` installs on it, and `funes update` keeps it.

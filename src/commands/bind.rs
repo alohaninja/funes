@@ -40,14 +40,17 @@ pub(crate) async fn resolve_named(spec: &str) -> Result<Option<Resolved>> {
 }
 
 /// `funes bind`: bind this host to `spec`, `local` to unbind, every installed agent following, then
-/// the first push when this host has a local memory and the memory is on the Hub.
-pub async fn run(spec: &str) -> Result<()> {
+/// the first push when this host has a local memory and the memory is on the Hub, unless `no_push`.
+pub async fn run(spec: &str, no_push: bool) -> Result<()> {
     let resolved = resolve_named(spec).await?;
     bind_host(resolved.clone(), None).await?;
     let Some(Resolved { memory, created }) = resolved else {
         return Ok(());
     };
-    if matches!(Memory::parse(&memory), Memory::Remote { .. }) && index::local_memory_model().await?.is_some() {
+    if !no_push
+        && matches!(Memory::parse(&memory), Memory::Remote { .. })
+        && index::local_memory_model().await?.is_some()
+    {
         first_push(&memory, created).await.with_context(|| {
             format!(
                 "this host is bound to {memory}, but the first push there did not go through — run \

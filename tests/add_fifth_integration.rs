@@ -257,6 +257,8 @@ fn run_with(
         .env_remove("HF_TOKEN")
         .env_remove("HUGGING_FACE_HUB_TOKEN")
         .env_remove("HUGGINGFACE_TOKEN")
+        .env_remove("HF_TOKEN_PATH")
+        .env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
         .env_remove("FUNES_BIN")
         .env("LANG", "en_US.UTF-8")
         .env_remove("LC_ALL")
@@ -1480,4 +1482,209 @@ fn bind_local_forgets_the_older_notes_whatever_the_setups_do() {
     let err = stderr(&out);
     assert!(!out.status.success() && err.contains("clyde did not follow"), "{err}");
     assert!(!note.exists());
+}
+
+/// Both invocations bind the host and make every integration follow. Only ordinary bind enters
+/// the first push: the offline Hub makes that path fail even without credentials or any rows.
+#[test]
+fn bind_no_push_skips_only_the_first_publish() {
+    for no_push in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let funes_home = tmp.path().join("funes");
+        let log = tmp.path().join("setup.log");
+        fs::create_dir_all(&home).unwrap();
+        support::assert_success(&funes_at_a_terminal(
+            &home,
+            &funes_home,
+            &log,
+            &["index", "--multilingual"],
+        ));
+        for id in ["clyde", "dotty"] {
+            bundle(&home.join("integrations").join(id), id, 1, "");
+            support::assert_success(&funes_at_a_terminal(&home, &funes_home, &log, &["add", id]));
+        }
+        for id in ["clyde", "dotty"] {
+            fs::write(home.join(format!(".funes/agents/{id}.memory")), "acme/old\n").unwrap();
+        }
+        fs::remove_file(&log).unwrap();
+
+        let mut argv = vec![
+            "env",
+            "HF_ENDPOINT=http://127.0.0.1:9",
+            env!("CARGO_BIN_EXE_funes"),
+            "bind",
+            "acme/memory",
+        ];
+        if no_push {
+            argv.push("--no-push");
+        }
+        let out = run(&argv, &home, &funes_home, &log);
+        let err = stderr(&out);
+        if no_push {
+            support::assert_success(&out);
+            assert!(
+                !funes_home.join("pushed").exists(),
+                "no push lock or receipt should be created"
+            );
+        } else {
+            assert!(!out.status.success(), "ordinary bind must still attempt the first push");
+            assert!(err.contains("the first push there did not go through"), "{err}");
+            assert!(err.contains("unreachable right now"), "{err}");
+        }
+        assert_eq!(
+            fs::read_to_string(funes_home.join("bound")).unwrap().trim(),
+            "acme/memory"
+        );
+        let setup = fs::read_to_string(&log).unwrap();
+        assert_eq!(setup.matches("add acme/memory\n").count(), 2, "{setup}");
+        for id in ["clyde", "dotty"] {
+            assert!(setup.contains(&format!("FUNES_AGENT_ID={id}\n")), "{setup}");
+            assert!(!home.join(format!(".funes/agents/{id}.memory")).exists());
+        }
+    }
+}
+
+/// Skipping the push must still take a readable memory's model, or refuse a mismatch before
+/// changing the host binding or running any integration's setup.
+#[tokio::test]
+async fn bind_no_push_keeps_model_validation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let funes_home = tmp.path().join("funes");
+    let log = tmp.path().join("setup.log");
+    let other = tmp.path().join("other");
+    fs::create_dir_all(&home).unwrap();
+    support::assert_success(&funes_at_a_terminal(&home, &other, &log, &["index", "--multilingual"]));
+    let memory = other.join("memory");
+    let memory = memory.to_str().unwrap();
+
+    support::assert_success(&funes(&home, &funes_home, &log, &["bind", memory, "--no-push"]));
+    let local = support::open_memory(&funes_home).await;
+    assert_eq!(
+        dataset::embedding_model(&local).unwrap(),
+        EmbeddingModel::MultilingualE5Small
+    );
+
+    bundle(&home.join("integrations/clyde"), "clyde", 1, "");
+    support::assert_success(&funes_at_a_terminal(&home, &funes_home, &log, &["add", "clyde"]));
+    fs::remove_file(&log).unwrap();
+    let english = tmp.path().join("english");
+    // An add with no history creates an empty memory with the English default model.
+    support::assert_success(&funes_at_a_terminal(&home, &english, &log, &["add", "clyde", "local"]));
+    fs::remove_file(&log).unwrap();
+    let english_memory = english.join("memory");
+    let out = funes(
+        &home,
+        &funes_home,
+        &log,
+        &["bind", english_memory.to_str().unwrap(), "--no-push"],
+    );
+    let err = stderr(&out);
+    assert!(
+        !out.status.success() && err.contains("a memory takes one embedding model"),
+        "{err}"
+    );
+    assert_eq!(fs::read_to_string(funes_home.join("bound")).unwrap().trim(), memory);
+    assert!(!log.exists(), "setup ran despite the model mismatch");
+}
+
+#[test]
+fn bind_no_push_cannot_guess_an_unreachable_memorys_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let funes_home = tmp.path().join("funes");
+    let log = tmp.path().join("setup.log");
+    install(&home, "clyde", 1);
+    let out = run(
+        &[
+            "env",
+            "HF_ENDPOINT=http://127.0.0.1:9",
+            env!("CARGO_BIN_EXE_funes"),
+            "bind",
+            "acme/memory",
+            "--no-push",
+        ],
+        &home,
+        &funes_home,
+        &log,
+    );
+    let err = stderr(&out);
+    assert!(
+        !out.status.success() && err.contains("the local memory takes its embedding model"),
+        "{err}"
+    );
+    assert!(!funes_home.join("bound").exists());
+    assert!(!funes_home.join("memory").exists());
+    assert!(!log.exists(), "setup ran despite the unreadable model");
+}
+
+/// The named-memory typo guard still runs. Fake only the Hub's repository lookup, through the
+/// same endpoint override the offline tests use; no live repository or credentials are involved.
+#[tokio::test]
+async fn bind_no_push_refuses_a_missing_hub_repo() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let funes_home = tmp.path().join("funes");
+    let log = tmp.path().join("setup.log");
+    install(&home, "clyde", 1);
+    fs::create_dir_all(&funes_home).unwrap();
+    fs::write(funes_home.join("bound"), "acme/old\n").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("HF_ENDPOINT=http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+            }
+            socket.write_all(b"HTTP/1.1 404 Not Found\r\nx-error-code: RepoNotFound\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            String::from_utf8(request).unwrap()
+        }).await.unwrap()
+    });
+    let child_home = home.clone();
+    let child_funes_home = funes_home.clone();
+    let child_log = log.clone();
+    // Deliberately supply a fake cached credential: the helper must disable implicit auth,
+    // not merely rely on an empty developer cache. No real HF home is exposed to this endpoint.
+    let hf_home = tmp.path().join("hf");
+    fs::create_dir_all(&hf_home).unwrap();
+    fs::write(hf_home.join("token"), "synthetic-fixture-not-a-real-token").unwrap();
+    let hf_home = format!("HF_HOME={}", hf_home.display());
+    let out = tokio::task::spawn_blocking(move || {
+        run(
+            &[
+                "env",
+                &endpoint,
+                &hf_home,
+                "NO_PROXY=127.0.0.1,localhost,::1",
+                "no_proxy=127.0.0.1,localhost,::1",
+                env!("CARGO_BIN_EXE_funes"),
+                "bind",
+                "acme/missing",
+                "--no-push",
+            ],
+            &child_home,
+            &child_funes_home,
+            &child_log,
+        )
+    })
+    .await
+    .unwrap();
+    let err = stderr(&out);
+    assert!(
+        !out.status.success() && err.contains("doesn't exist on the Hub"),
+        "{err}"
+    );
+    assert_eq!(fs::read_to_string(funes_home.join("bound")).unwrap(), "acme/old\n");
+    assert!(!log.exists(), "setup ran despite the missing repository");
+    let request = server.await.unwrap();
+    assert!(request.starts_with("GET /api/datasets/acme/missing"));
+    assert!(
+        !request.to_ascii_lowercase().contains("\r\nauthorization:"),
+        "the fixture received an authorization header"
+    );
 }
