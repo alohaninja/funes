@@ -1524,15 +1524,18 @@ fn rephrase_languages<'a>(memories: impl IntoIterator<Item = &'a Dataset>) -> Op
     }
 }
 
-/// Local index progress and its last write time. A version with no recorded timestamp is omitted.
-async fn index_lines(ds: &Dataset, now: DateTime<Utc>) -> Result<String> {
+/// Index progress and its last write time. Only this host's index owns the source-coverage
+/// snapshot; another memory at a local path has its own embedding progress but no such receipt here.
+async fn index_lines(ds: &Dataset, now: DateTime<Utc>, host_index: bool) -> Result<String> {
     let mut out = String::new();
     if let Some(n) = session_count(ds).await {
         let _ = writeln!(out, "sessions: {n}");
     }
     out.push_str(&pending_embeddings_line(ds).await?);
-    if let Some(line) = index_coverage_line() {
-        out.push_str(&line);
+    if host_index {
+        if let Some(line) = index_coverage_line() {
+            out.push_str(&line);
+        }
     }
     if let Some(t) = dataset::last_write(ds) {
         let _ = writeln!(out, "last indexed: {}", stamp(t, now));
@@ -1609,7 +1612,17 @@ pub async fn status(target: impl Into<Target>) -> Result<String> {
                 languages_line(&ds, rows)
             );
             match &memory {
-                Memory::Local { .. } => out.push_str(&index_lines(&ds, now).await?),
+                Memory::Local { path } => {
+                    // Relative paths and symlinks can name the host index too. Keep this check
+                    // local to status; onboarding's default-memory distinction stays lexical.
+                    let host_index = memory.is_default_local()
+                        || path
+                            .canonicalize()
+                            .ok()
+                            .zip(crate::home::memory_dir().canonicalize().ok())
+                            .is_some_and(|(path, host)| path == host);
+                    out.push_str(&index_lines(&ds, now, host_index).await?);
+                }
                 Memory::Remote { uri } => {
                     out.push_str(&remote_lines(&ds, now).await);
                     // The local index is what pushes here — show it alongside, so one status
@@ -1621,7 +1634,7 @@ pub async fn status(target: impl Into<Target>) -> Result<String> {
                             "\nlocal index: {}\nchunks: {local_rows}",
                             Memory::local().label()
                         );
-                        out.push_str(&index_lines(&local, now).await?);
+                        out.push_str(&index_lines(&local, now, true).await?);
                         if bound {
                             out.push_str(&push_coverage_lines(&local, &memory, uri).await);
                         }

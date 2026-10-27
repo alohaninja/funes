@@ -132,6 +132,18 @@ against your criteria and reports them, and the person publishing passes that li
 [`funes bind`](add.md#binding-a-memory)), and an update check. A host set up by a funes from
 before the binding is told what its agents were bound to, and what binds it.
 
+Name a memory to inspect it using the same selector as the MCP `status` tool:
+
+```bash
+funes status --memory local          # local indexing and embedding progress, without network access
+funes status --memory acme/memory    # inspect a published memory
+```
+
+A named status skips host push coverage and the update check. `--memory local` also ignores the
+host binding, so an integration can inspect its local index without waiting for the bound remote.
+Remote status retains the MCP tool's accompanying local-index information. Local stale-install
+diagnostics still appear on stderr.
+
 `funes status` tells you whether recall is reading your own memory yet, and whether a newer funes
 release is out. Its local-index sections distinguish chunks awaiting embedding from source
 sessions not yet indexed. Run `funes index` to continue either. Each memory also lists the

@@ -180,9 +180,14 @@ enum Cmd {
         #[command(flatten)]
         memory: MemoryOpts,
     },
-    /// Show the local index, and the memory this host is bound to with what this host has yet to
-    /// push there.
-    Status,
+    /// Show one memory's status, or the local index and this host's bound memory with its push
+    /// coverage when no memory is named.
+    Status {
+        /// Memory to inspect, as it stands: `<org>/<repo>`, an `hf://…` URI, a local path, or `local`.
+        /// Naming a memory skips host push coverage and the update check; `local` needs no network.
+        #[arg(long, value_name = "MEMORY")]
+        memory: Option<String>,
+    },
     /// Publish your local memory's new embedded chunks to a remote memory on the HF Hub.
     Push {
         /// Memory to publish to: `<org>/<repo>` or a full `hf://…` URI.
@@ -328,7 +333,7 @@ async fn run() -> Result<()> {
             | Cmd::Sessions { .. }
             | Cmd::Scan { .. }
             | Cmd::Sketch { .. }
-            | Cmd::Status
+            | Cmd::Status { .. }
             | Cmd::Ask { .. }
     ) {
         if let Some(note) = agents::stale_install_notice() {
@@ -454,7 +459,12 @@ async fn run() -> Result<()> {
             })
             .await
         }
-        Cmd::Status => {
+        Cmd::Status { memory } => {
+            if let Some(spec) = memory.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                // A named status does not depend on the host binding, including a damaged one.
+                print!("{}", recall::status(memory::Memory::parse(spec)).await?);
+                return Ok(());
+            }
             let bound = memory::binding()?;
             let note = bind::legacy_note(bound.as_deref())?;
             print!("{}", recall::host_status(bound.as_deref(), note.as_deref()).await?);
