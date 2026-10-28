@@ -152,4 +152,16 @@ async fn an_explicit_path_reports_that_memory_instead_of_the_host_index() {
         text.contains("pending indexing: 1 source session"),
         "a relative path to the host index lost its backlog: {text}"
     );
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(funes_home.join("memory"), home.path().join("host-link")).unwrap();
+        let linked = status(home.path(), &funes_home, &network, &["--memory", "./host-link"]);
+        support::assert_success(&linked);
+        let text = String::from_utf8(linked.stdout).unwrap();
+        assert!(
+            text.contains("pending indexing: 1 source session"),
+            "a symlink to the host index lost its backlog: {text}"
+        );
+    }
 }

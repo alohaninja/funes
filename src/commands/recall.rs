@@ -1600,9 +1600,15 @@ async fn push_coverage_lines(local: &Dataset, memory: &Memory, uri: &str) -> Str
 /// memory: coverage is a question only for a memory this host pushes to.
 pub async fn status(target: impl Into<Target>) -> Result<String> {
     let target = target.into();
+    let opened = open_for_read(target.memory()).await?;
+    status_opened(target, opened).await
+}
+
+/// Format a status after the memory lookup, keeping remote access out of rendering tests.
+async fn status_opened(target: Target, opened: ReadOutcome) -> Result<String> {
     let bound = target.is_bound();
     let memory = target.into_memory();
-    match open_for_read(&memory).await? {
+    match opened {
         ReadOutcome::Ready(ds) => {
             let now = Utc::now();
             let rows = dataset::count_rows(&ds, None).await?;
@@ -1783,6 +1789,78 @@ mod tests {
         let out = status(memory).await.unwrap();
         assert!(out.starts_with(&prefix), "{out}");
         assert!(!out.contains("awaiting embedding"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn remote_status_keeps_the_host_indexs_source_backlog() {
+        const CHILD: &str = "FUNES_REMOTE_STATUS_TEST_HOME";
+        let Some(home) = std::env::var_os(CHILD) else {
+            // The remote branch reads the host index. Give it a process-local home rather than
+            // changing FUNES_HOME while other unit tests are running.
+            let home = tempfile::tempdir().unwrap();
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "commands::recall::tests::remote_status_keeps_the_host_indexs_source_backlog",
+                ])
+                .env(CHILD, home.path())
+                .env("HOME", home.path())
+                .env("FUNES_HOME", home.path().join("funes"))
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&out.stdout).contains("test result: ok. 1 passed;"),
+                "the isolated fixture did not execute: {}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            return;
+        };
+        let home = Path::new(&home);
+        assert_eq!(crate::home::dir(), home.join("funes"));
+        let local = Memory::local();
+        memory_of(
+            &[text_turn("local-session", 0, "user", "A locally indexed turn.")],
+            Path::new(&dataset::table_uri(local.label())),
+        )
+        .await;
+        std::fs::write(
+            crate::home::index_coverage_file(),
+            serde_json::json!({"pending": [home.join("pending.funes.jsonl")]}).to_string(),
+        )
+        .unwrap();
+        let remote = memory_of(
+            &[
+                text_turn("remote-session", 0, "user", "A published question."),
+                text_turn("remote-session", 1, "assistant", "A published answer."),
+            ],
+            &home.join("remote.lance"),
+        )
+        .await;
+
+        // Supply a real, ready dataset at the lookup boundary. The remote rendering branch and
+        // its local-index read run unchanged, without needing a Hub repository or credentials.
+        let out = status_opened(Memory::parse("acme/status-fixture").into(), ReadOutcome::Ready(remote))
+            .await
+            .unwrap();
+        assert!(
+            out.starts_with("memory: hf://datasets/acme/status-fixture\nchunks: 2\n"),
+            "{out}"
+        );
+        let (_, local_out) = out
+            .split_once("\nlocal index: ")
+            .expect("remote status includes the host index");
+        assert!(local_out.contains("\nchunks: 1\nsessions: 1\n"), "{out}");
+        assert!(local_out.contains("pending indexing: 1 source session"), "{out}");
+        assert!(
+            !out.contains("\nlocal push"),
+            "a named remote does not report push coverage: {out}"
+        );
     }
 
     #[tokio::test]
