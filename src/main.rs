@@ -230,14 +230,14 @@ enum Cmd {
     },
     /// Bind this host to a memory: every installed agent recalls from it and publishes to it.
     ///
-    /// Re-runs each installed agent's setup on the memory, and does the first push when this host
-    /// has a local memory it has never published there. `local` unbinds.
+    /// Re-runs each installed agent's setup on the memory, then attempts the first push to a Hub
+    /// memory when this host has a local memory. `--no-push` defers that built-in push; `local` unbinds.
     Bind {
         /// The memory — an `<org>/<repo>` shorthand, an `hf://…` URI, a local path, or `local`.
         #[arg(value_name = "MEMORY")]
         memory: String,
-        /// Skip bind's built-in first push. Still validate and bind the memory and re-run
-        /// integrations; their setup code and hooks may publish independently.
+        /// Skip bind's built-in first push. Keep the usual repository and model checks, bind the
+        /// memory, and re-run integrations; their setup code and hooks may publish independently.
         #[arg(long)]
         no_push: bool,
     },

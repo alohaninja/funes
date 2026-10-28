@@ -58,39 +58,50 @@ funes bind local                           # back to the local memory, every age
 ```
 
 To bind now and defer the built-in first push, run `funes bind <memory> --no-push`, then
-`funes push <memory>` when ready. The memory is still validated and every installed integration's
-setup still runs. Setup code and installed hooks may publish independently; this option skips only
-`bind`'s own first push. It creates no push receipt: binding alone does not make unpushed local
-turns appear in bound-memory reads, which still depend on receipt evidence from a push.
+`funes push <memory>` at a terminal when ready. `--no-push` is available only on `bind`;
+`funes add` still performs its first push when a Hub memory is bound. The usual repository and model
+checks still apply, including the offline behavior below, and every installed integration's setup
+still runs. Setup code and installed hooks may publish independently; this option skips only
+`bind`'s own first push.
+
+`--no-push` creates no push receipt. On a host with no prior receipt for that memory, binding alone
+does not enable the unpushed-local-turn overlay in bound-memory reads; a push must establish that
+receipt. An existing receipt is retained, so rebinding can restore that overlay immediately.
 
 - The binding is one record for the host, `$FUNES_HOME/bound`, written by `bind` alone. Each
   agent's registration carries a copy, and `bind` re-runs every installed agent's setup so the
   copies follow; a bare `funes add <agent>` installs on it, and `funes update` keeps it.
 - A read naming no memory — `funes recall` with no `--memory`, a tool call with no `memory` —
-  reads the bound memory as it will be after this host's next push: its rows, and the turns this
-  host has indexed but not pushed yet. A read naming a memory, the bound one included, reads it
-  as it stands, and `local` reads this host's memory alone;
+  reads the bound memory and, with a push receipt for it, the turns this host has indexed but not
+  pushed yet. A read naming a memory, the bound one included, reads it as it stands, and `local`
+  reads this host's memory alone;
   [recall.md](recall.md#reading-a-different-memory) has the details.
 - A host set up by a funes from before the binding noted a memory beside each agent it bound
   instead. The next `funes update` or bare `funes add` binds the host to it when those agents all
   noted the same one, every installed agent following, and `funes status` says so until then.
   Agents that noted different memories were never meant to: the update names them, and
   `funes bind <memory>` picks one, or `funes bind local` none.
-- A memory that does not exist on the Hub yet: `funes add` offers to create it (default no, to
-  catch typos). Repositories funes creates are **private by default**; changing that later is an
-  explicit action on the Hub. An existing repository keeps its visibility.
+- A memory that does not exist on the Hub yet: `funes bind` and `funes add` offer to create it
+  (default no, to catch typos). Repositories funes creates are **private by default**; changing that
+  later is an explicit action on the Hub. An existing repository keeps its visibility. A newly
+  created repository has no recorded embedding model until a push initializes its dataset;
+  `bind --no-push` defers that initialization too.
 - A memory holds one [embedding model](index.md#sessions-not-in-english), so `funes bind` and
   `funes add` refuse a memory embedded with another model than your local memory, before anything
-  is bound. On a host with no local memory yet, they create it with the memory's model, and stop
-  if they can't read that memory.
+  is bound. On a host with no local model yet, they adopt the target's model when it has one, and
+  stop if they can't read that memory. With a local model already recorded, an unreachable target
+  can still be bound; its model has not been verified.
 - Publishing needs [TruffleHog](https://github.com/trufflesecurity/trufflehog): the first push
   `add` performs and every push the automation runs fail closed unless funes can scan the content
   for credentials, which agent traces commonly capture. funes looks for it on `PATH`, or at the
   path `FUNES_TRUFFLEHOG` names. A local-only setup does not need it.
-- The first push to a freshly-bound memory is `bind`'s, or `add`'s, to do, at a terminal: the
-  hooks refuse it off one (the wrong-memory guard, in [automation.md](automation.md)). On a new
-  host, binding it or re-running `funes add` once clears the guard for that machine, as soon as it
-  has an index of its own to push. A memory at a local path is not pushed to.
+- With a local memory in place, `bind` (unless `--no-push`) and `add` attempt the first push to a
+  bound Hub memory. Later ordinary pushes and hooks still use the [wrong-memory guard](push.md#funes-push):
+  when there are new chunks to publish and the target holds none of the eligible embedded chunks,
+  a push asks for confirmation at a terminal and unattended hooks refuse.
+  `funes push <memory> --yes` overrides the confirmation.
+  With no new rows to publish, or any overlap with the eligible chunks, the guard does not ask;
+  prior publication by this host alone does not bypass it. A memory at a local path is not pushed to.
 
 ## Getting the newest integration
 
@@ -215,12 +226,12 @@ the memory this host is bound to, else the local memory. `mcp` is read-only: ind
 publishing remain separate commands or automation installed by `funes add`.
 
 On a server started on the host's bound memory, which is what `funes add` registers, a call naming
-none reads it as it will be after this host's next push. The hooks publish at session boundaries,
-so without this, a turn another local session just indexed would stay out of reach until a session
-opens or ends. Such turns come back in the same reply, a session holding them is listed and read
-from the local memory, which holds all of it, and the `→ get` lines name no memory, so following
-them reads the same way. What counts as not pushed is what this host's push receipt for the memory
-lacks, which `funes status` reports as pending.
+none includes unpushed local turns once this host has a push receipt for that memory. The hooks
+publish at session boundaries, so without this, a turn another local session just indexed would stay
+out of reach until a session opens or ends. Such turns come back in the same reply, a session holding
+them is listed and read from the local memory, which holds all of it, and the `→ get` lines name no
+memory, so following them reads the same way. What counts as not pushed is what this host's push
+receipt for the memory lacks, which `funes status` reports as pending.
 
 A call naming a memory, the bound one included, reads exactly what that memory holds, and so does
 a call naming none on a server started by hand on a memory this host is not bound to: your local
